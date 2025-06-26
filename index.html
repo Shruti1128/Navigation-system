@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="icon" href="icon-192.png" type="image/png">
+
+  <link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#007bff" />
+
+  <meta charset="utf-8" />
+  <title>Voice Navigation Map with Detailed Search</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css"/>
+  <style>
+    body { margin:0; font-family:sans-serif; }
+    #map { height: 75vh; }
+    .controls { padding:10px; text-align:center; background:#f9f9f9; position: relative; }
+    .search-container { position: relative; display: inline-block; width: 60%; }
+    #place {
+      width:100%; padding:6px; font-size:16px; box-sizing: border-box;
+    }
+    .clear-btn {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      background: #ccc; border: none; border-radius: 50%; font-weight: bold;
+      cursor: pointer; font-size: 16px; padding: 2px 8px;
+    }
+    .controls button, .mic-btn {
+      font-size:16px; padding:6px 10px; margin-left:5px;
+      border-radius:5px; cursor:pointer;
+    }
+    .mic-btn { background:#eee; }
+    .category-icons { margin-top: 10px; }
+    .category-icons button {
+      font-size: 20px; margin: 3px; padding: 6px 10px;
+      border: none; border-radius: 6px; cursor: pointer;
+    }
+    .dark-mode { --bg:#1e1e1e; --fg:#fff; background:var(--bg); color:var(--fg); }
+    .dark-toggle {
+      position:absolute; top:10px; right:10px; padding:5px 10px;
+      font-size:16px; border-radius:5px; background:#eee; z-index:1000;
+    }
+    .custom-user-icon .blue-dot {
+      width: 14px;
+      height: 14px;
+      background: #007bff;
+      border-radius: 50%;
+      box-shadow: 0 0 8px rgba(0,123,255,0.8);
+    }
+    #suggestions {
+      position: absolute;
+      background: white;
+      border: 1px solid #ccc;
+      border-top: none;
+      max-height: 200px;
+      overflow-y: auto;
+      width: 100%;
+      z-index: 10000;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    #suggestions div {
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    #suggestions div:hover {
+      background-color: #f0f0f0;
+    }
+    #custom-directions {
+      position: absolute;
+      top: 80px;
+      right: 10px;
+      width: 280px;
+      max-height: 70vh;
+      overflow-y: auto;
+      background: white;
+      border: 1px solid #ccc;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      z-index: 10000;
+      padding: 10px;
+      display: none;
+      font-size: 14px;
+    }
+    #custom-directions .close-btn {
+      position: absolute;
+      top: 5px;
+      right: 6px;
+      background: #ccc;
+      border: none;
+      border-radius: 50%;
+      font-weight: bold;
+      cursor: pointer;
+      padding: 2px 8px;
+    }
+    #toggle-directions-btn {
+      position: absolute;
+      bottom: 90px;
+      right: 15px;
+      z-index: 10001;
+      padding: 10px 12px;
+      font-size: 18px;
+      background: #f0f0f0;
+      border: 1px solid #ccc;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<script>
+  let deferredPrompt;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    console.log("✅ Install prompt available");
+
+    // Create install button
+    const installBtn = document.createElement('button');
+    installBtn.textContent = "📲 Install App";
+    installBtn.style.position = "fixed";
+    installBtn.style.bottom = "20px";
+    installBtn.style.right = "20px";
+    installBtn.style.padding = "10px 15px";
+    installBtn.style.background = "#007bff";
+    installBtn.style.color = "white";
+    installBtn.style.border = "none";
+    installBtn.style.borderRadius = "8px";
+    installBtn.style.zIndex = "9999";
+    installBtn.style.fontSize = "16px";
+    document.body.appendChild(installBtn);
+
+    installBtn.onclick = () => {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then(choice => {
+        if (choice.outcome === 'accepted') {
+          console.log("✅ App installed");
+        } else {
+          console.log("❌ Installation dismissed");
+        }
+        installBtn.remove();
+        deferredPrompt = null;
+      });
+    };
+  });
+</script>
+<button id="install-btn" style="display:none; position:fixed; bottom:20px; right:20px; padding:10px 15px; font-size:16px;">📲 Install App</button>
+
+
+
+<body>
+
+  <button class="dark-toggle" onclick="document.body.classList.toggle('dark-mode')">🌙</button>
+  <h2 style="text-align:center;">🎤 Voice Navigation Map with Detailed Search</h2>
+
+  <div class="controls">
+    <div class="search-container">
+      <input id="place" placeholder="Search or say a detailed address..." autocomplete="off">
+      <button class="clear-btn" onclick="clearSearch()">×</button>
+      <div id="suggestions" style="display:none;"></div>
+    </div>
+    <button onclick="searchPlace()">Go</button>
+    <button class="mic-btn" onclick="startVoice()">🎤</button>
+     <button onclick="map.setView([userLat, userLon], 16)">📍 Follow Me</button>
+    
+  </div>
+
+  <div id="map"></div>
+  <div id="custom-directions">
+    <button class="close-btn" onclick="toggleDirections(false)">×</button>
+    <div id="directions-content">Loading directions...</div>
+  </div>
+  <button id="toggle-directions-btn" onclick="toggleDirections(true)" style="display: none;">🧭</button>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.min.js"></script>
+
+  <script>
+    let recognition = null;
+    const map = L.map('map').setView([20.5937, 78.9629], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    const poiLayer = L.layerGroup().addTo(map);
+    
+
+    const userIcon = L.divIcon({
+      className: 'custom-user-icon',
+      html: `<div class="blue-dot"></div>`,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10]
+    });
+
+    let userLat = null, userLon = null;
+    let routingControl = null;
+    let zoomedToUser = false;
+    let showCustomDirections = true;
+
+navigator.geolocation.watchPosition(pos => {
+  userLat = pos.coords.latitude;
+  userLon = pos.coords.longitude;
+
+  console.log("📍 Actual GPS Location:", userLat, userLon);
+
+  // 1. Update or create user marker
+  if (!window.userMarker) {
+    window.userMarker = L.marker([userLat, userLon], { icon: userIcon }).addTo(map);
+  } else {
+    window.userMarker.setLatLng([userLat, userLon]);
+  }
+
+  // 2. Auto-pan the map to user
+  if (!zoomedToUser) {
+  map.setView([userLat, userLon], 16);
+  zoomedToUser = true;
+}
+// Remove auto-pan after first centering
+
+
+  // 3. Recalculate route to destination (dot-dot lines move)
+  if (window.destinationLatLng) {
+    setupRoute(L.latLng(userLat, userLon), window.destinationLatLng);
+  }
+
+  // 4. Voice turn-by-turn instructions
+  if (window.routeSteps && window.routeSteps.length) {
+    for (let i = 0; i < window.routeSteps.length; i++) {
+      const step = window.routeSteps[i];
+      const dist = getDistance(userLat, userLon, step.lat, step.lon);
+
+      if (!step.announced && dist < 120) {
+        let message = dist < 20 ? `Now ${step.text}` : `In ${Math.round(dist)} meters, ${step.text}`;
+        if (!speechSynthesis.speaking) {
+          const utter = new SpeechSynthesisUtterance(message);
+          utter.lang = 'en-IN';
+          speechSynthesis.speak(utter);
+          step.announced = true;
+          break;
+        }
+      }
+
+      if (i === window.routeSteps.length - 1 && dist < 15 && !step.arrived) {
+        const finalUtter = new SpeechSynthesisUtterance("You have arrived at your destination.");
+        finalUtter.lang = 'en-IN';
+        speechSynthesis.cancel();
+        speechSynthesis.speak(finalUtter);
+        step.arrived = true;
+        break;
+      }
+    }
+  }
+
+}, err => {
+  console.warn("GPS error:", err);
+});
+
+
+
+    const input = document.getElementById('place');
+    const suggestionsBox = document.getElementById('suggestions');
+
+    input.addEventListener('input', async () => {
+  const q = input.value.trim();
+  if (q.length < 3) {
+    suggestionsBox.style.display = 'none';
+    suggestionsBox.innerHTML = '';
+    return;
+  }
+
+  try {
+    const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=10`);
+    const results = await res.json();
+
+    if (!results.features.length) return;
+
+    suggestionsBox.innerHTML = '';
+    results.features.forEach(place => {
+      const div = document.createElement('div');
+      div.textContent = place.properties.name + ', ' + (place.properties.city || '') + ', ' + (place.properties.country || '');
+      div.onclick = () => selectSuggestion({
+        lat: place.geometry.coordinates[1],
+        lon: place.geometry.coordinates[0],
+        display_name: div.textContent
+      });
+      suggestionsBox.appendChild(div);
+    });
+    suggestionsBox.style.display = 'block';
+  } catch (err) {
+    console.error(err);
+  }
+});
+
+
+    function selectSuggestion(place) {
+      suggestionsBox.innerHTML = '';
+      suggestionsBox.style.display = 'none';
+      input.value = place.display_name;
+      poiLayer.clearLayers();
+      if (routingControl) map.removeControl(routingControl);
+
+      const lat = +place.lat;
+      const lon = +place.lon;
+      map.setView([lat, lon], 17);
+      L.marker([lat, lon]).addTo(poiLayer).bindPopup(`<b>Destination</b><br>${place.display_name}`).openPopup();
+
+      if (userLat !== null && userLon !== null) {
+  window.destinationLatLng = L.latLng(lat, lon); // ✅ store destination globally
+  setupRoute(L.latLng(userLat, userLon), window.destinationLatLng);
+}
+
+    }
+
+    async function searchPlace() {
+  const q = input.value.trim();
+  if (!q) return;
+
+  try {
+    const response = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1`);
+    const results = await response.json();
+
+    if (!results.features.length) {
+      alert("❌ No results found.");
+      return;
+    }
+
+    const place = results.features[0];
+    const lat = place.geometry.coordinates[1];
+    const lon = place.geometry.coordinates[0];
+    const name = place.properties.name || place.properties.street || "Unnamed location";
+
+    selectSuggestion({
+      lat: lat,
+      lon: lon,
+      display_name: name + ', ' + (place.properties.city || '') + ', ' + (place.properties.country || '')
+    });
+  } catch (err) {
+    console.error("❌ Search error:", err);
+  }
+}
+
+
+    function clearSearch() {
+      input.value = "";
+      poiLayer.clearLayers();
+      if (routingControl) map.removeControl(routingControl);
+      if (userLat && userLon) map.setView([userLat, userLon], 16);
+      suggestionsBox.innerHTML = '';
+      suggestionsBox.style.display = 'none';
+      toggleDirections(false);
+    }
+
+function setupRoute(fromLatLng, toLatLng) {
+  if (!fromLatLng || !toLatLng) return;
+
+  if (routingControl) {
+    map.removeControl(routingControl);
+    routingControl = null;
+  }
+
+  routingControl = L.Routing.control({
+    waypoints: [fromLatLng, toLatLng],
+    routeWhileDragging: false,
+    lineOptions: {
+      styles: [{ color: 'blue', weight: 5, dashArray: '6,6' }]
+    },
+    createMarker: () => null,
+    show: false,
+    router: L.Routing.osrmv1({
+      serviceUrl: 'https://router.project-osrm.org/route/v1'
+    })
+  }).addTo(map);
+
+  routingControl.on('routesfound', function (e) {
+    const route = e.routes[0];
+    const instructions = route.instructions || [];
+    const coordinates = route.coordinates;
+    window.routeSteps = [];
+
+    // 🗺️ Build the voice nav steps from coordinates
+    coordinates.forEach((coord, i) => {
+      window.routeSteps.push({
+        text: `Go to point ${i + 1}`,
+        lat: coord.lat,
+        lon: coord.lng,
+        announced: false,
+        arrived: false
+      });
+    });
+
+    // 📋 Build turn-by-turn directions HTML
+    let directionsHTML = `<b>Estimated time:</b> ${(route.summary.totalTime / 60).toFixed(1)} mins<br>`;
+    directionsHTML += `<b>Total distance:</b> ${(route.summary.totalDistance / 1000).toFixed(2)} km<hr><ol style="padding-left: 16px;">`;
+
+    for (let i = 0; i < instructions.length; i++) {
+      const instr = instructions[i];
+      directionsHTML += `<li>${instr.text}</li>`;
+    }
+
+    directionsHTML += `</ol>`;
+    document.getElementById("directions-content").innerHTML = directionsHTML;
+
+    toggleDirections(true);  // Show side panel
+  });
+}
+
+
+
+    function toggleDirections(show) {
+      showCustomDirections = show;
+      document.getElementById("custom-directions").style.display = show ? "block" : "none";
+      document.getElementById("toggle-directions-btn").style.display = show ? "none" : "block";
+    }
+
+    function getDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371e3;
+      const φ1 = lat1 * Math.PI/180, φ2 = lat2 * Math.PI/180;
+      const Δφ = (lat2-lat1) * Math.PI/180, Δλ = (lon2-lon1) * Math.PI/180;
+      const a = Math.sin(Δφ/2)**2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2)**2;
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    async function findNearest(type) {
+      if (userLat === null || userLon === null) return alert("Waiting for GPS...");
+      if (routingControl) map.removeControl(routingControl);
+      poiLayer.clearLayers();
+
+      const MAX_RADIUS = 5000;
+      let nearest = null, nearestDist = Infinity;
+
+      function metersToDegrees(m) { return m / 111000; }
+
+      for (let r of [500, 1000, 2000, 3000, 4000, 5000]) {
+        const d = metersToDegrees(r);
+        const bbox = [userLon - d, userLat - d, userLon + d, userLat + d].join(',');
+        const query = `[out:json][timeout:25];node["amenity"="${type}"](${bbox});out body;`;
+        const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+
+        try {
+          const res = await fetch(url);
+          const json = await res.json();
+          const filtered = json.elements.filter(el => getDistance(userLat, userLon, el.lat, el.lon) <= MAX_RADIUS);
+          if (filtered.length) {
+            filtered.forEach(el => {
+              const dist = getDistance(userLat, userLon, el.lat, el.lon);
+              if (dist < nearestDist) {
+                nearestDist = dist;
+                nearest = el;
+              }
+            });
+            break;
+          }
+        } catch (err) { console.error(err); }
+      }
+
+      if (nearest) {
+        const marker = L.marker([nearest.lat, nearest.lon], {
+          icon: L.divIcon({ html: `<div style="font-size:20px">${amenityIcons[nearest.tags.amenity] || "📍"}</div>`, iconSize: [24, 24] })
+        }).addTo(poiLayer);
+        marker.bindPopup(`<b>${nearest.tags.name || nearest.tags.amenity}</b><br>${nearest.tags.amenity}`).openPopup();
+        setupRoute(L.latLng(userLat, userLon), L.latLng(nearest.lat, nearest.lon));
+        map.setView([nearest.lat, nearest.lon], 16);
+      } else {
+        alert("No nearby result found.");
+      }
+    }
+
+    function startVoice() {
+      if (!('webkitSpeechRecognition' in window)) return alert("Voice search not supported.");
+      if (recognition) recognition.abort();
+      recognition = new webkitSpeechRecognition();
+      recognition.lang = "en-IN";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.onresult = event => {
+        const text = event.results[0][0].transcript.trim();
+        document.getElementById("place").value = text;
+        searchPlace();
+      };
+      recognition.onerror = e => alert("Voice error: " + e.error);
+      recognition.onend = () => recognition = null;
+      recognition.start();
+    }
+  </script>
+  <script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('service-worker.js')
+      .then(reg => console.log("✅ Service Worker registered"))
+      .catch(err => console.error("❌ Service Worker registration failed:", err));
+  }
+</script>
+
+</body>
+</html>  
